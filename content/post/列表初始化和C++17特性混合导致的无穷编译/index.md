@@ -7,7 +7,7 @@ authors:
 tags: [C++]
 categories: [C++]
 date: "2020-02-22T00:00:00Z"
-lastmod: "2020-02-22T00:00:00Z"
+lastmod: "2020-02-23T00:00:00Z"
 featured: false
 draft: false
 
@@ -15,8 +15,9 @@ draft: false
 # To use, add an image named `featured.jpg/png` to your page's folder. 
 image:
   placement: 3
-  caption: ""
-  focal_point: ""
+  caption: ''
+  focal_point: "Center"
+  preview_only: false
 
 # Projects (optional).
 #   Associate this post with one or more of your projects.
@@ -26,15 +27,13 @@ image:
 projects: []
 ---
 
-![png](./featured.png)
-
-今天看知乎发现一个有趣的C++的错误，文章源自：https://zhuanlan.zhihu.com/p/63643875 及其下的讨论区
+今天看知乎发现一个有趣的C++的错误，文章源自：<https://zhuanlan.zhihu.com/p/63643875> 及其下的讨论区
 
 首先参考代码如下：
 
 ```cpp
 //-std = c++17
-#include <stdio.h>
+#include <cstdio>
 #include <vector>
 
 template <typename T>

@@ -7,7 +7,7 @@ authors:
 tags: ["GFW", "Trojan", "MacOS"]
 categories: [GFW]
 date: "2020-02-25T00:00:00Z"
-lastmod: "2020-02-25T00:00:00Z"
+lastmod: "2020-02-26T00:00:00Z"
 featured: false
 draft: false
 
@@ -29,7 +29,11 @@ projects: []
 
 同样的，本文将基于Mac系统
 经过测试，现在来说，使用mellow程序进行全局化是比较合适与方便的
+
 mellow下载地址为：[https://github.com/mellow-io/mellow](https://github.com/mellow-io/mellow)
+
+现在Mac下也支持了使用brew的安装`brew cask install mellow`（强烈推荐使用这种方式，后续Update也会方便很多）
+
 前一篇文章设定的port是10800，但是这里如果port设定太高似乎有问题（不知道为啥之前的10800端口一直起不来），重新改成1080的端口，设置修改如下
 
 ![](2.png)

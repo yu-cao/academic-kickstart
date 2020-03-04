@@ -7,7 +7,7 @@ authors:
 tags: ["C++", "Source Code", "new", "malloc"]
 categories: [C++]
 date: "2020-03-03T00:00:00Z"
-lastmod: "2020-03-03T00:00:00Z"
+lastmod: "2020-03-04T00:00:00Z"
 featured: false
 draft: false
 
@@ -26,6 +26,8 @@ image:
 #   Otherwise, set `projects = []`.
 projects: []
 ---
+
+## 有关内存管理的一些学习与记录
 
 容器(containers) 通过分配器(allocator)来分配内存(memory)
 
@@ -173,7 +175,7 @@ delete[] pca;//调用3次析构函数
 
 首先，这个一定需要注意：对于`new[]`一定要配对`delete[]`，否则**容易**造成**内存泄漏**！
 - 编译器怎么知道需要执行`delete`多少次呢？——在`malloc`的时候，会在头前面给出一个cookie，包含块的各种信息，`free`依靠这些信息进行析构（所有的平台都有这样的设计）
-- 为什么说是`容易`，而不是`一定`呢？——对于class without ptr member可能会没有影响（因为之前的cookie存在，free知道回收的大小），对于class with ptr member通常会有影响！比如
+- 为什么说是`容易`，而不是`一定`呢？——对于class without ptr member可能会没有影响（因为之前的cookie存在，free知道回收的大小，如上面的`Complex`并不会出现泄漏），对于class with ptr member通常会有影响！比如
 
 ```cpp
 string* psa = new string[3];
@@ -185,3 +187,97 @@ delete psa;
 
 ![](array_new与delete的注意点1.png)
 
+```cpp
+class A{
+public:
+	int id;
+	A():id(0) {cout << "default ctor. this = " << this << "id = " << id << endl;}
+	A(int i):id(i) {cout << "ctor. this = " << this << "id = " << id << endl;}
+	~A() {cout << "dtor. this = " << this << "id = " << id << endl;}
+};
+
+int main()
+{
+	const int size = 3;
+	A* buf = new A[size];
+	A* tmp = buf;
+
+	cout << "buf = " << buf << " tmp = " << tmp << endl;
+
+	for(int i = 0; i < size; ++i)
+		new(tmp++)A(i);//placement new
+
+	cout << "buf = " << buf << " tmp = " << tmp << endl;
+
+	delete[] buf;
+}
+
+// default ctor. this = 0x7f99c6c017c8 id = 0
+// default ctor. this = 0x7f99c6c017cc id = 0
+// default ctor. this = 0x7f99c6c017d0 id = 0
+// buf = 0x7f99c6c017c8 tmp = 0x7f99c6c017c8
+// ctor. this = 0x7f99c6c017c8 id = 0
+// ctor. this = 0x7f99c6c017cc id = 1
+// ctor. this = 0x7f99c6c017d0 id = 2
+// buf = 0x7f99c6c017c8 tmp = 0x7f99c6c017d4
+// dtor. this = 0x7f99c6c017d0 id = 2 析构是反向析构的，调用3次析构
+// dtor. this = 0x7f99c6c017cc id = 1
+// dtor. this = 0x7f99c6c017c8 id = 0
+```
+
+我们希望以后能够不再需要Cookie！（这部分会在未来进行讨论）
+
+![](VC6的new行为内存情况.png)
+
+最后要调整到16的倍数（alignment），最后调整到的大小为60h，额外要有状态记录块的大小，调整为61h
+
+因为析构函数是编译器内置的往往不会发生问题，而如果析构函数是程序员手动控制的可能会引发错误
+
+![](delete指向错误.png)
+
+这里因为两个指针p指向的对象内存地址存在差异导致析构失败，直接抛出错误！也就是说，如果不加入`[]`，编译器的`free`无法得知这些自定义的类型个数，就默认为一块对像，按照一块对像的释放法则，只释放了第一个的析构（实际上都不一定，因为整个内存布局已经乱了），以下是例子：
+
+```cpp
+//用上面的A为例，编译器为Apple llvm
+int main()
+{
+	A* p = new A[3];
+	delete p;
+}
+
+// default ctor. this = 0x7fcccf4017c8 id = 0
+// default ctor. this = 0x7fcccf4017cc id = 0
+// default ctor. this = 0x7fcccf4017d0 id = 0
+// dtor. this = 0x7fcccf4017c8 id = 0
+// malloc: *** error for object 0x7fcccf4017c8: pointer being freed was not allocated
+// malloc: *** set a breakpoint in malloc_error_break to debug
+```
+
+### placement new
+
+placement new允许我们将object在已经分配的内存(allocated memory)上（但没有placement delete语法，但需要对operator new进行对应的operator delete）
+
+```cpp
+char* buf = new char[sizeof(Complex) * 3];
+Complex* pc = new(buf)Complex(1, 2);
+```
+
+对于第二行的placement new，编译器可能会翻译为：
+
+```cpp
+Complex* pc;
+try{
+	void* mem = operator new(sizeof(Complex), buf);//allocate
+	pc = static_cast<Complex*>(mem);//cast
+	pc->Complex::Complex(1, 2);//construct
+}
+catch(std::bad_alloc){
+
+}
+
+//对于上面的operator new，源码为：
+//clang/test/Analysis/input/system-header-simulator-cxx.h
+void* operator new (std::size_t size, void* ptr) throw() { return ptr; };
+```
+
+也就是说，placement new就只执行construct这部分，第一步因为ptr是已经分配的内存，直接就返回了（如源码所示）

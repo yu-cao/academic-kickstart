@@ -1,10 +1,10 @@
 ---
 title: '内存管理相关内容(2)'
 subtitle: '主要对Jie Hou的一些视频所讲的有关内存管理方面的知识的学习'
-summary: 本文主要讨论全局new/delete与成员new/delete的差异，同时编写与改进一个小的内存池，为之后理解分配器源码进行铺垫
+summary: 本文主要讨论全局new/delete与成员new/delete的差异，同时编写与不断改进一个小的内存池，为之后理解标准库中的分配器的演进与源码进行知识铺垫
 authors:
 - admin
-tags: ["C++", "member new",  "Memory Pool"]
+tags: ["C++", "member new",  "Memory Pool", "Alloc"]
 categories: [C++]
 date: "2020-03-14T00:00:00Z"
 lastmod: "2020-03-14T00:00:00Z"
@@ -347,3 +347,185 @@ Q：那么失效之后我怎么交还掉这块内存呢？（我一开始也疑�
 + 实在不理解就对`p[1]`进行`set`，看前后的`*next`的改变，然后调试`delete`部分即可
 
 但是我们持有很多不使用的块而不归还给OS，这样的行为应该说是我们自作主张，不是个好的行为，之后会讨论与尝试解决这个问题
+
+<hr>
+
+## static allocator
+
+之前我们为每个不同的classes都需要重新设计一个几乎相同的`member operator new / delete`，这时候我们的想法就是能否对其进行一个抽象，形成一个`allocator`的概念能够进行复用。下面每个`allocator object`都是一个分配器，内部维护一个free-lists，不同的`allocator object`维护不同的free-lists
+
+```cpp
+class allocator
+{
+private:
+    struct obj{
+        struct obj* next;//embedded pointer
+    };
+
+public:
+    void* allocate(size_t);
+    void deallocate(void*, size_t);
+
+private:
+    obj* freeStore = nullptr;
+    const int CHUNK = 5;
+};
+
+void allocator::deallocate(void * p, size_t)
+{
+    ((obj*) p)->next = freeStore;
+    freeStore = (obj*)p;
+}
+
+void *allocator::allocate(size_t size)
+{
+    obj *p;
+    if (!freeStore)
+    {
+        size_t chunk = CHUNK * size;
+        freeStore = p = (obj *) malloc(chunk);
+
+        for (int i = 0; i < (CHUNK - 1); i++)
+        {
+            p->next = (obj *) ((char *) p + size);
+            p = p->next;
+        }
+        p->next = nullptr;
+    }
+    p = freeStore;
+    freeStore = p->next;
+    return p;
+}
+```
+
+通过我们写的`allocator`，其他的类的设计就可以非常统一化，不必管理内存的具体分配，而全部交给`allocator`处理
+
+```cpp
+class Foo
+{
+public:
+    long L;
+    std::string str;
+    static allocator myAlloc;//里面含有单向链表，其中的区块就是Foo大小
+
+public:
+    Foo(long l):L(l){}
+    static void* operator new(size_t size)
+    {
+        return myAlloc.allocate(size);
+    }
+    static void operator delete(void* pdead, size_t size)
+    {
+        return myAlloc.deallocate(pdead, size);
+    }
+};
+
+allocator Foo::myAlloc;
+
+
+int main()
+{
+    Foo *p[100];
+    std::cout << "sizeof(Foo) = " << sizeof(Foo) << std::endl;
+    for (int i = 0; i < 23; ++i)
+    {
+        p[i] = new Foo(i);
+        std::cout << p[i] << ' ' << p[i]->L << std::endl;
+    }
+
+    for (int i = 0; i < 23; ++i)
+        delete p[i];
+}
+
+/*
+sizeof(Foo) = 32
+0x7fd36ed001f0 0
+0x7fd36ed00210 1
+0x7fd36ed00230 2
+0x7fd36ed00250 3
+0x7fd36ed00270 4
+0x7fd36ed00290 5
+0x7fd36ed002b0 6
+0x7fd36ed002d0 7
+0x7fd36ed002f0 8
+0x7fd36ed00310 9
+0x7fd36ed00330 10
+0x7fd36ed00350 11
+0x7fd36ed00370 12
+0x7fd36ed00390 13
+0x7fd36ed003b0 14
+0x7fd36ed003d0 15
+0x7fd36ed003f0 16
+0x7fd36ed00410 17
+0x7fd36ed00430 18
+0x7fd36ed00450 19
+0x7fd36ed00470 20
+0x7fd36ed00490 21
+0x7fd36ed004b0 22
+*/
+```
+
+上面的内存显示看上去是整齐连续的，但是实际上是以`CHUNK = 5`来进行分区块的，每5个保证连续（DEBUG模式下虚拟内存估计给你配好了，就很稳定）
+
+<hr>
+
+但是实际上，我们还有能够简化的地方
+
+```cpp
+class Foo
+{
+public:
+    long L;
+    std::string str;
+    static allocator myAlloc;//该内容与类本身无关，且所有类都类似
+
+public:
+    Foo(long l):L(l){}
+
+    //以下内容均与类本身无关，且所有类都类似
+    static void* operator new(size_t size)
+    { return myAlloc.allocate(size); }
+    static void operator delete(void* pdead, size_t size)
+    { return myAlloc.deallocate(pdead, size); }
+};
+
+allocator Foo::myAlloc;//该内容与类本身无关，且所有类都类似
+```
+
+我们可以想到通过`MACRO`可以来对相同的东西进行替换，于是可以得到
+
+```cpp
+#define DECLARE_POOL_ALLOC()\
+public:\
+    void* operator new(size_t size) {return myAlloc.allocate(size); }\
+    void operator delete(void* p) { myAlloc.deallocate(p, 0);}\
+protected:\
+    static allocator myAlloc;
+
+#define IMPLEMENT_POOL_ALLOC(class_name)\
+    allocator class_name::myAlloc;
+```
+
+于是刚刚的代码可以缩减成为：
+
+```cpp
+class Foo
+{
+    DECLARE_POOL_ALLOC()
+public:
+    long L;
+    std::string str;
+public:
+    Foo(long l) : L(l) {}
+};
+
+IMPLEMENT_POOL_ALLOC(Goo)
+```
+
+当年MFC时代这种类似的做法比较流行
+
+将之前的`allocator`再进一步，变成具有16条free-list的，也不再在application class中以static方式呈现，而是用一个`global allocator`的方式，这就是`std::alloc`的原型
+
+![](featured.png)
+
+至此，我们已经了解了`std::alloc`的演进过程，并为后面真正掌握`std::alloc`打下来基础
